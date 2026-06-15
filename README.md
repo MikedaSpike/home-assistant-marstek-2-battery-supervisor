@@ -22,7 +22,7 @@ It acts as a robust supervisor layer on top of Codebob's *Home Battery Control (
 
 Unlike traditional automation setups, this supervisor **does not directly send active charging or discharging power commands** to the hardware. Instead, it acts as an intelligent gatekeeper by dynamically manipulating the maximum allowed boundaries: `max_charge_power` and `max_discharge_power` for each unit. 
 
-Codebob's *Home Battery Control (HBC)* integration remains completely responsible for calculating and distributing the actual dynamic wattage steps. The supervisor evaluates the system at a set **time interval** and opens or closes the power "gates" (setting them to either 0W or maximum capacity, e.g., 2500W) according to the following strict logic:
+CodeBob's *Home Battery Control (HBC)* https://homebatterycontrol.com/  integration remains completely responsible for calculating and distributing the actual dynamic wattage steps. The supervisor evaluates the system at a set **time interval** and opens or closes the power "gates" (setting them to either 0W or maximum capacity, e.g., 2500W) according to the following strict logic:
 
 ### 1. Charging Sequence
 - HBC dictates when the system needs to store energy. 
