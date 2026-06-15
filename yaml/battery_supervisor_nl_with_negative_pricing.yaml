@@ -1,0 +1,228 @@
+alias: "Batterij Supervisor: Serieel Schakelen inclusief negatieve prijs"
+description: >-
+  Garandeert dat 1 batterij actief is (2500W). Inclusief robuuste logica voor
+  Master/Slave, voltage-bounce beveiliging (hysterese), verfijnde stuck-detectie
+  en gegarandeerde, gefilterde UI logging.
+triggers:
+  - trigger: state
+    entity_id:
+      - input_number.house_battery_control_prioritize_battery
+      - sensor.marstek_m1_battery_state_of_charge
+      - sensor.marstek_m2_battery_state_of_charge
+      - sensor.hbc_energy_prices_data
+  - trigger: time_pattern
+    minutes: /5
+actions:
+  - action: system_log.write
+    data:
+      logger: marstek_supervisor
+      level: debug
+      message: >-
+        ⭐ Batterij M{{ prio_bat }} is geconfigureerd als Master.
+
+        💶 Energieprijs: {{ 'NEGATIEF (Max laden, ontladen gestopt)' if
+        is_price_negative else 'Normaal / Positief' }}
+
+        🔋 Batterij 1 (M1) - Rol: {{ bat1_role }}
+           - SOC: {{ m1_soc }}% (Cutoff ingesteld op: {{ m1_discharge_cutoff }}% - {{ m1_charge_cutoff }}%)
+           - HUIDIGE Limiet HA: In: {{ states('number.marstek_m1_max_charge_power') }}W / Uit: {{ states('number.marstek_m1_max_discharge_power') }}W
+           - NIEUW Berekend Doel: In: {{ target_m1_charge }}W / Uit: {{ target_m1_discharge }}W
+           - HBC Opdracht: {{ m1_commanded }} ({{ m1_req_power }}W) | Actueel vermogen: {{ m1_actual_power }}W
+           - Status: {{ '⚠️ VASTGELOPEN (ZOMBIE)' if m1_stuck else 'Ok / Standby' }}
+
+        🔋 Batterij 2 (M2) - Rol: {{ bat2_role }}
+           - SOC: {{ m2_soc }}% (Cutoff ingesteld op: {{ m2_discharge_cutoff }}% - {{ m2_charge_cutoff }}%)
+           - HUIDIGE Limiet HA: In: {{ states('number.marstek_m2_max_charge_power') }}W / Uit: {{ states('number.marstek_m2_max_discharge_power') }}W
+           - NIEUW Berekend Doel: In: {{ target_m2_charge }}W / Uit: {{ target_m2_discharge }}W
+           - HBC Opdracht: {{ m2_commanded }} ({{ m2_req_power }}W) | Actueel vermogen: {{ m2_actual_power }}W
+           - Status: {{ '⚠️ VASTGELOPEN (ZOMBIE)' if m2_stuck else 'Ok / Standby' }}
+
+        🤖 Besluitvorming:
+          - Actieve configuratie: M{{ active_bat if active_bat != 0 else 'GEEN' }}
+          - Doelconfiguratie: M{{ target_bat }}
+
+        👉 Conclusie: {{ switch_reason | trim }}
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ needs_update }}"
+        sequence:
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.marstek_laatste_actie
+            data:
+              value: "{{ switch_reason | trim }}"
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.marstek_log_historie
+            data:
+              value: >-
+                {{ ((now().strftime('%H:%M') ~ ': ' ~ (switch_reason|trim)) ~
+                '\n' ~
+                states('input_text.marstek_log_historie')).split('\n')[:5] |
+                join('\n') }}
+  - condition: template
+    value_template: "{{ needs_update }}"
+  - action: system_log.write
+    data:
+      logger: marstek_supervisor
+      level: warning
+      message: >-
+        [Actie Uitgevoerd] Vermogenslimieten gewijzigd. Conclusie: {{
+        switch_reason | trim }}
+  - action: number.set_value
+    target:
+      entity_id: number.marstek_m1_max_charge_power
+    data:
+      value: "{{ target_m1_charge }}"
+  - action: number.set_value
+    target:
+      entity_id: number.marstek_m1_max_discharge_power
+    data:
+      value: "{{ target_m1_discharge }}"
+  - action: number.set_value
+    target:
+      entity_id: number.marstek_m2_max_charge_power
+    data:
+      value: "{{ target_m2_charge }}"
+  - action: number.set_value
+    target:
+      entity_id: number.marstek_m2_max_discharge_power
+    data:
+      value: "{{ target_m2_discharge }}"
+trace:
+  stored_traces: 400
+mode: single
+variables:
+  prio_bat: >-
+    {{ states('input_number.house_battery_control_prioritize_battery') | int(1) }}
+  is_price_negative: "{{ states('sensor.hbc_energy_prices_data') | float(0) < 0 }}"
+  bat1_role: "{{ 'Master' if prio_bat == 1 else 'Slave' }}"
+  bat2_role: "{{ 'Master' if prio_bat == 2 else 'Slave' }}"
+  m1_soc: "{{ states('sensor.marstek_m1_battery_state_of_charge') | float(0) }}"
+  m2_soc: "{{ states('sensor.marstek_m2_battery_state_of_charge') | float(0) }}"
+  m1_charge_cutoff: "{{ states('input_number.marstek_m1_charging_cutoff_capacity') | float(98) }}"
+  m1_discharge_cutoff: >-
+    {{ states('input_number.marstek_m1_discharging_cutoff_capacity') | float(15) }}
+  m2_charge_cutoff: "{{ states('input_number.marstek_m2_charging_cutoff_capacity') | float(98) }}"
+  m2_discharge_cutoff: >-
+    {{ states('input_number.marstek_m2_discharging_cutoff_capacity') | float(15) }}
+  active_bat: >-
+    {% if states('number.marstek_m1_max_charge_power') | float(0) == 2500 %} 1
+    {% elif states('number.marstek_m2_max_charge_power') | float(0) == 2500 %} 2
+    {% else %} 0 {% endif %}
+  m1_commanded: "{{ states('select.marstek_m1_forcible_charge_discharge') | lower }}"
+  m1_req_power: >-
+    {% if m1_commanded == 'charge' %} {{
+    states('number.marstek_m1_forcible_charge_power') | float(0) }}  {% elif
+    m1_commanded == 'discharge' %} {{
+    states('number.marstek_m1_forcible_discharge_power') | float(0) }}  {% else %} 0 {% endif %}
+  m1_actual_power: "{{ states('sensor.marstek_m1_ac_power') | float(0) | abs }}"
+  m1_mode_age: >-
+    {{ (now() -
+    states.select.marstek_m1_forcible_charge_discharge.last_changed).total_seconds()
+    | int }}
+  m1_c_limit_age: >-
+    {{ (now() -
+    states.number.marstek_m1_max_charge_power.last_changed).total_seconds() | int }}
+  m1_d_limit_age: >-
+    {{ (now() -
+    states.number.marstek_m1_max_discharge_power.last_changed).total_seconds() | int }}
+  m1_time_ok: "{{ m1_mode_age > 90 and m1_c_limit_age > 90 and m1_d_limit_age > 90 }}"
+  m1_stuck: >-
+    {{ active_bat == 1 and m1_commanded != 'stop' and m1_req_power > 30 and
+    m1_actual_power < 5 and m1_time_ok and not (m1_soc >= m1_charge_cutoff or
+    m1_soc <= m1_discharge_cutoff) }}
+  m2_commanded: "{{ states('select.marstek_m2_forcible_charge_discharge') | lower }}"
+  m2_req_power: >-
+    {% if m2_commanded == 'charge' %} {{
+    states('number.marstek_m2_forcible_charge_power') | float(0) }}  {% elif
+    m2_commanded == 'discharge' %} {{
+    states('number.marstek_m2_forcible_discharge_power') | float(0) }}  {% else %} 0 {% endif %}
+  m2_actual_power: "{{ states('sensor.marstek_m2_ac_power') | float(0) | abs }}"
+  m2_mode_age: >-
+    {{ (now() -
+    states.select.marstek_m2_forcible_charge_discharge.last_changed).total_seconds()
+    | int }}
+  m2_c_limit_age: >-
+    {{ (now() -
+    states.number.marstek_m2_max_charge_power.last_changed).total_seconds() | int }}
+  m2_d_limit_age: >-
+    {{ (now() -
+    states.number.marstek_m2_max_discharge_power.last_changed).total_seconds() | int }}
+  m2_time_ok: "{{ m2_mode_age > 90 and m2_c_limit_age > 90 and m2_d_limit_age > 90 }}"
+  m2_stuck: >-
+    {{ active_bat == 2 and m2_commanded != 'stop' and m2_req_power > 30 and
+    m2_actual_power < 5 and m2_time_ok and not (m2_soc >= m2_charge_cutoff or
+    m2_soc <= m2_discharge_cutoff) }}
+  master_id: "{{ prio_bat }}"
+  slave_id: "{{ 2 if prio_bat == 1 else 1 }}"
+  m1_empty: "{{ m1_soc <= m1_discharge_cutoff }}"
+  m1_full: "{{ m1_soc >= m1_charge_cutoff }}"
+  m1_bounced_empty: "{{ m1_soc <= (m1_discharge_cutoff + 3) }}"
+  m2_empty: "{{ m2_soc <= m2_discharge_cutoff }}"
+  m2_full: "{{ m2_soc >= m2_charge_cutoff }}"
+  m2_bounced_empty: "{{ m2_soc <= (m2_discharge_cutoff + 3) }}"
+  p_empty: "{{ m1_empty if master_id == 1 else m2_empty }}"
+  p_bounced_empty: "{{ m1_bounced_empty if master_id == 1 else m2_bounced_empty }}"
+  p_full: "{{ m1_full if master_id == 1 else m2_full }}"
+  p_stuck: "{{ m1_stuck if master_id == 1 else m2_stuck }}"
+  s_empty: "{{ m1_empty if slave_id == 1 else m2_empty }}"
+  s_bounced_empty: "{{ m1_bounced_empty if slave_id == 1 else m2_bounced_empty }}"
+  s_full: "{{ m1_full if slave_id == 1 else m2_full }}"
+  s_stuck: "{{ m1_stuck if slave_id == 1 else m2_stuck }}"
+  target_bat: |-
+    {% if (p_empty or p_bounced_empty) and (s_empty or s_bounced_empty) %}
+      {{ master_id }}
+    {% elif p_full and s_full %}
+      {{ slave_id }}
+    {% elif active_bat == master_id %}
+      {% if p_full or p_empty or p_stuck %} {{ slave_id }}
+      {% else %} {{ master_id }} {% endif %}
+    {% elif active_bat == slave_id %}
+      {% if s_full or s_empty or s_stuck %} {{ master_id }}
+      {% else %} {{ slave_id }} {% endif %}
+    {% else %}
+      {% if p_bounced_empty and not s_bounced_empty %} {{ slave_id }}
+      {% elif p_full and not s_full %} {{ slave_id }}
+      {% else %} {{ master_id }} {% endif %}
+    {% endif %}
+  target_m1_charge: >-
+    {% if target_bat == 1 %} 2500 {% elif is_price_negative %} 1150 {% else %} 0 {% endif %}
+  target_m1_discharge: >-
+    {% if is_price_negative %} 0 {% elif target_bat == 1 %} 2500 {% else %} 0 {% endif %}
+  target_m2_charge: >-
+    {% if target_bat == 2 %} 2500 {% elif is_price_negative %} 1150 {% else %} 0 {% endif %}
+  target_m2_discharge: >-
+    {% if is_price_negative %} 0 {% elif target_bat == 2 %} 2500 {% else %} 0 {% endif %}
+  needs_update: >-
+    {{ states('number.marstek_m1_max_charge_power') | float(-1) != target_m1_charge | float or 
+       states('number.marstek_m1_max_discharge_power') | float(-1) != target_m1_discharge | float or 
+       states('number.marstek_m2_max_charge_power') | float(-1) != target_m2_charge | float or 
+       states('number.marstek_m2_max_discharge_power') | float(-1) != target_m2_discharge | float }}
+  switch_reason: >-
+    {% set active_role = bat1_role if active_bat == 1 else bat2_role %}   {% set
+    target_role = bat1_role if target_bat == 1 else bat2_role %}   {% set
+    active_soc = m1_soc if active_bat == 1 else m2_soc %}   {% set
+    is_active_stuck = m1_stuck if active_bat == 1 else m2_stuck %} {% set
+    active_req = m1_req_power if active_bat == 1 else m2_req_power %} {% set
+    active_act = m1_actual_power if active_bat == 1 else m2_actual_power %} {%
+    set active_cmd = m1_commanded if active_bat == 1 else m2_commanded %} {% set
+    active_mode_age = m1_mode_age if active_bat == 1 else m2_mode_age %} {% set
+    active_c_age = m1_c_limit_age if active_bat == 1 else m2_c_limit_age %} {%
+    set active_d_age = m1_d_limit_age if active_bat == 1 else m2_d_limit_age %}
+    {%- if not needs_update -%}
+      Systeem in stabiele toestand. Geen configuratiewijzigingen vereist.
+    {%- elif is_price_negative and
+    (states('number.marstek_m1_max_discharge_power')|float > 0 or
+    states('number.marstek_m2_max_discharge_power')|float > 0) -%}
+      Energieprijs negatief! Ontladen is zojuist volledig gestopt. Beide batterijen geactiveerd voor laden.
+    {%- elif target_bat != active_bat and active_bat != 0 -%}
+      {%- if is_active_stuck -%}
+        ⚠️ {{ active_role }} Batterij {{ active_bat }} (M{{ active_bat }}) is vastgelopen! SOC: {{ active_soc }}%, Cmd: {{ active_cmd }} @ {{ active_req }}W (gewijzigd: {{ active_mode_age }}s), Actueel: {{ active_act }}W (C-lim: {{ active_c_age }}s, D-lim: {{ active_d_age }}s). Schakelen naar {{ target_role }} Batterij {{ target_bat }} (M{{ target_bat }}).
+      {%- else -%}
+        {{ active_role }} Batterij {{ active_bat }} (M{{ active_bat }}) heeft de limiet bereikt ({{ active_soc }}%). Schakelen naar {{ target_role }} Batterij {{ target_bat }} (M{{ target_bat }}).
+      {%- endif -%}
+    {%- else -%}
+      Synchronisatie van vermogenslimieten: Hardware instellingen in lijn gebracht met huidige systeemspecificaties.
+    {%- endif -%}
