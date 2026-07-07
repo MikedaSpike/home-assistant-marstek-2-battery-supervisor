@@ -121,3 +121,12 @@ Follow these steps to safely load the supervisor code into your Home Assistant e
 7. Click **Save** in the bottom right corner. Give it a descriptive name when prompted.
 
 ⚠️ **Important Node Verification:** Review the entity IDs used within the automation configuration variables section (at the bottom of the file) to ensure they perfectly match your actual system sensor naming conventions (e.g., `sensor.marstek_m1_battery_state_of_charge`, `sensor.hbc_energy_prices_data`, etc.). Adjust them in the YAML if yours are named differently.
+
+---
+### Support my projects
+  
+Do you find my work for Pinball or my other projects useful? A coffee (or a pinball part) is always greatly appreciated!
+
+<a href="https://www.buymeacoffee.com/q5dlxoaayq">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" width="160" />
+</a
